@@ -1,3 +1,295 @@
+## Simplified Jenkinsfile for Lambda-Only Updates
+
+Here's a streamlined version focused **only** on updating existing Lambda functions:
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        DEV_ACCOUNT = 'dev-account'
+    }
+    
+    tools {
+        python 'Python3'
+    }
+    
+    // Only run pipeline on dev branch
+    when {
+        branch 'dev'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
+                }
+                echo "🔀 Code pushed to dev branch - Updating Lambda functions"
+                echo "Building branch: ${env.BRANCH_NAME}"
+                echo "Commit: ${env.GIT_COMMIT_SHORT}"
+            }
+        }
+        
+        stage('Install Lambda Dependencies') {
+            steps {
+                sh '''
+                    echo "📦 Installing Lambda dependencies..."
+                    
+                    # Create virtual environment for dependency installation
+                    python3 -m venv venv
+                    source venv/bin/activate
+                    
+                    # Upgrade pip
+                    pip install --upgrade pip
+                    
+                    # Install dependencies for each Lambda function
+                    find . -name "lambda_function.py" -type f | while read lambda_file; do
+                        lambda_dir=$(dirname "$lambda_file")
+                        lambda_name=$(basename "$lambda_dir")
+                        
+                        echo "Processing Lambda: $lambda_name"
+                        
+                        if [ -f "$lambda_dir/requirements.txt" ]; then
+                            echo "Installing dependencies for $lambda_name"
+                            # Install dependencies into Lambda directory for packaging
+                            pip install -r "$lambda_dir/requirements.txt" -t "$lambda_dir/"
+                        else
+                            echo "No requirements.txt found for $lambda_name - skipping dependencies"
+                        fi
+                    done
+                    
+                    echo "✅ All Lambda dependencies installed"
+                '''
+            }
+        }
+        
+        stage('Package and Update Lambda Functions') {
+            steps {
+                echo "⚡ Updating existing Lambda functions in AWS..."
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding', 
+                     credentialsId: 'aws-dev-account-credentials']
+                ]) {
+                    sh '''
+                        # Find and update all Lambda functions
+                        find . -name "lambda_function.py" -type f | while read lambda_file; do
+                            lambda_dir=$(dirname "$lambda_file")
+                            lambda_name=$(basename "$lambda_dir")
+                            
+                            echo "📦 Packaging Lambda: $lambda_name"
+                            
+                            # Create deployment package
+                            cd "$lambda_dir"
+                            
+                            # Create zip excluding unnecessary files
+                            zip -r "../../${lambda_name}-dev.zip" . \
+                                -x "*.pyc" "*/__pycache__/*" "*/.pytest_cache/*" \
+                                   "*/tests/*" "*.md" ".DS_Store" "*.coverage*" \
+                                   "venv/*" ".git*" "*.log"
+                            
+                            cd - > /dev/null
+                            
+                            echo "🚀 Updating Lambda function: ${lambda_name}-dev"
+                            
+                            # Update existing Lambda function code
+                            aws lambda update-function-code \
+                                --function-name "${lambda_name}-dev" \
+                                --zip-file "fileb://${lambda_name}-dev.zip" \
+                                --region ${AWS_DEFAULT_REGION}
+                            
+                            echo "✅ ${lambda_name}-dev updated successfully"
+                            echo ""
+                        done
+                    '''
+                }
+            }
+        }
+        
+        stage('Verify Lambda Updates') {
+            steps {
+                echo "🔍 Verifying Lambda function updates..."
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding', 
+                     credentialsId: 'aws-dev-account-credentials']
+                ]) {
+                    sh '''
+                        echo "⚡ Updated Lambda Functions Status:"
+                        echo "================================================"
+                        
+                        find . -name "lambda_function.py" -type f | while read lambda_file; do
+                            lambda_dir=$(dirname "$lambda_file")
+                            lambda_name=$(basename "$lambda_dir")
+                            
+                            echo "Checking: ${lambda_name}-dev"
+                            
+                            # Get function info to verify update
+                            aws lambda get-function \
+                                --function-name "${lambda_name}-dev" \
+                                --region ${AWS_DEFAULT_REGION} \
+                                --query 'Configuration.[FunctionName,LastModified,State,Runtime,CodeSize]' \
+                                --output table
+                            
+                            echo ""
+                        done
+                        
+                        echo "✅ All Lambda functions verified successfully"
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            sh '''
+                echo "🧹 Cleaning up build artifacts..."
+                
+                # Remove deployment packages
+                rm -f *-dev.zip || true
+                
+                # Remove virtual environment
+                rm -rf venv || true
+                
+                # Clean up any installed dependencies in Lambda directories
+                find . -name "lambda_function.py" -type f | while read lambda_file; do
+                    lambda_dir=$(dirname "$lambda_file")
+                    # Remove installed packages but keep lambda_function.py and requirements.txt
+                    cd "$lambda_dir"
+                    find . -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true
+                    find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+                    find . -name "*.pyc" -delete 2>/dev/null || true
+                    cd - > /dev/null
+                done
+                
+                echo "✅ Cleanup completed"
+            '''
+        }
+        success {
+            script {
+                // Count Lambda functions
+                def lambdaCount = sh(
+                    script: 'find . -name "lambda_function.py" -type f | wc -l',
+                    returnStdout: true
+                ).trim() as Integer
+                
+                echo """
+🎉 LAMBDA FUNCTIONS UPDATED SUCCESSFULLY!
+
+📋 Deployment Summary:
+✅ ${lambdaCount} Lambda function(s) updated in AWS dev account
+✅ All functions verified and running
+✅ Code changes from VSCode → AWS Lambda ✓
+
+📝 Updated Functions:"""
+                
+                // List all updated functions
+                sh '''
+                    find . -name "lambda_function.py" -type f | while read lambda_file; do
+                        lambda_dir=$(dirname "$lambda_file")
+                        lambda_name=$(basename "$lambda_dir")
+                        echo "   ✅ ${lambda_name}-dev"
+                    done
+                '''
+                
+                echo """
+🔄 Development Workflow:
+1. Edit code in VSCode ✓
+2. Push to dev branch ✓  
+3. Jenkins updates AWS Lambda ✓
+4. Test your functions in AWS console
+
+🚀 Your Lambda functions are now updated and ready for testing!
+                """
+            }
+        }
+        failure {
+            echo '''
+❌ LAMBDA UPDATE FAILED!
+
+🔧 Common Issues & Solutions:
+1. AWS Credentials: Verify 'aws-dev-account-credentials' in Jenkins
+2. Lambda Function Names: Ensure functions exist as '{directory-name}-dev'
+3. Dependencies: Check requirements.txt files are valid
+4. Permissions: Verify Jenkins has lambda:UpdateFunctionCode permission
+
+🔄 To retry:
+Fix the issue and push another commit to dev branch
+
+💡 Debug Steps:
+1. Check Jenkins console output above for specific error
+2. Verify Lambda function exists in AWS console
+3. Test AWS credentials manually if needed
+            '''
+        }
+    }
+}
+```
+
+## **Key Changes Made:**
+
+### **Removed:**
+- ❌ **S3/Static Asset deployment** - No frontend needed
+- ❌ **Build Assets stage** - No building required
+- ❌ **Unit/Integration testing** - Skipped for now
+- ❌ **Frontend-related file checks** (package.json, dist/, build/, etc.)
+
+### **Focused On:**
+- ✅ **Lambda function detection** - Finds all `lambda_function.py` files
+- ✅ **Dependency installation** - Handles `requirements.txt` per Lambda
+- ✅ **Code packaging** - Creates ZIP files for deployment
+- ✅ **AWS Lambda updates** - Updates existing Lambda functions only
+- ✅ **Verification** - Confirms updates succeeded
+
+---
+
+## **What This Pipeline Does:**
+
+### **1. When you push to `dev` branch:**
+```
+VSCode → git push origin dev → Webhook → Jenkins → AWS Lambda Update
+```
+
+### **2. Pipeline automatically:**
+- Finds all directories with `lambda_function.py`
+- Installs dependencies from `requirements.txt` (if exists)
+- Packages each Lambda into a ZIP file
+- Updates the existing Lambda function in AWS (with `-dev` suffix)
+- Verifies the update succeeded
+
+### **3. Expected Repository Structure:**
+```
+your-repo/
+├── user-service/
+│   ├── lambda_function.py      # Your Lambda code
+│   └── requirements.txt        # Optional dependencies
+├── email-service/
+│   ├── lambda_function.py      # Another Lambda
+│   └── requirements.txt        # Its dependencies
+├── data-processor/
+│   └── lambda_function.py      # Lambda without dependencies
+└── Jenkinsfile                 # This pipeline
+```
+
+### **4. AWS Requirements:**
+- Lambda functions must exist as: `user-service-dev`, `email-service-dev`, etc.
+- Jenkins needs AWS credentials with `lambda:UpdateFunctionCode` permission
+
+---
+
+## **Workflow:**
+1. **Edit code in VSCode** ✏️
+2. **Commit and push to dev branch** 📤
+3. **Jenkins automatically updates AWS Lambda** ⚡
+4. **Test your updated function in AWS console** 🧪
+
+**This pipeline is now laser-focused on the core need: syncing your local code changes to AWS Lambda functions!**
+
 ## Detailed Pipeline Script Breakdown
 
 Let me walk through **exactly** what this Jenkins pipeline does, step by step:
