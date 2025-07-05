@@ -210,3 +210,114 @@ git push origin feature/test-pr
 4. **See "✅ Test pipeline completed successfully!" message**
 
 **If this works, your basic setup is solid and you can add complexity (real tests, deployment scripts, auto-merge, etc.)!**
+
+
+## You Need to Commit and Push Your Changes First
+
+Since you haven't pushed your `feature/testing` branch yet, here's what you need to do:
+
+### **Step 1: Check What You Have**
+```bash
+# See your current status
+git status
+git branch
+ls -la
+```
+
+### **Step 2: Add and Commit Your Files**
+```bash
+# Add your Jenkinsfile (and any other files you created)
+git add Jenkinsfile
+
+# If you also created README.md
+git add README.md
+
+# Commit the changes
+git commit -m "Add test Jenkins pipeline"
+```
+
+### **Step 3: Push Feature Branch**
+```bash
+# Push your feature branch to Bitbucket
+git push origin feature/testing
+```
+
+### **Step 4: Now Merge to Dev**
+```bash
+# Switch to dev branch
+git checkout dev
+
+# Pull latest dev changes (good practice)
+git pull origin dev
+
+# Merge your feature branch
+git merge feature/testing
+
+# Push to dev (this triggers Jenkins!)
+git push origin dev
+```
+
+---
+
+## **Alternative: Direct Push to Dev**
+
+**If you want to skip the feature branch entirely:**
+
+```bash
+# Switch directly to dev
+git checkout dev
+
+# Add your files
+git add Jenkinsfile
+# git add README.md  # if you created it
+
+# Commit
+git commit -m "Add test Jenkins pipeline"
+
+# Push to dev (triggers Jenkins)
+git push origin dev
+```
+
+---
+
+## **What You Should See:**
+
+### **After git push origin dev:**
+```bash
+Enumerating objects: 3, done.
+Counting objects: 100% (3/3), done.
+Writing objects: 100% (3/3), 1.2 KiB | 1.2 MiB/s, done.
+Total 3 (delta 0), reused 0 (delta 0)
+To ssh://bitbucket.corp.jefco.com:7999/~hcia/test.git
+   abc1234..def5678  dev -> dev
+```
+
+### **In Jenkins (within seconds):**
+- **New build appears** in your Jenkins job
+- **Build number increases** (e.g., Build #1, #2, etc.)
+- **Console output shows** your pipeline stages running
+
+### **If Jenkins Doesn't Trigger:**
+- Check webhook configuration in Bitbucket
+- Verify Jenkins job is configured to watch the `dev` branch
+- Look for error messages in Bitbucket webhook delivery logs
+
+---
+
+## **Quick Complete Flow:**
+
+```bash
+# 1. Commit your current work
+git add .
+git commit -m "Add test pipeline"
+
+# 2. Push to dev
+git checkout dev
+git merge feature/testing
+git push origin dev
+
+# 3. Immediately check Jenkins dashboard
+# 4. Look for new build starting automatically
+```
+
+**The key is that `git push origin dev` is what triggers the Jenkins build via webhook!**
