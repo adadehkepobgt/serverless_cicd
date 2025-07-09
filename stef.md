@@ -53,3 +53,5 @@ Here are some key questions and areas you can explore during the meeting:
 ---
 
 This structure will help you stay organized, build rapport, and gather the information you need effectively. Good luck!
+
+help me prepare the meeting with stefan, note that i need to make a ci/cd pipeline for serverless lambda application and I want to know the pain points of ppl doing dev and prod for serverless lambda application and more imporantly how are they doing the deployment right now, also since i dont know him how should i start the meeting
